@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/godronus-org/toolkit/v1/schema/fastedge.schema.json",
+  "title": "fastedge.jsonc",
+  "description": "Internal CI config for a godronus-org repo (context/new-org/SCHEMA.md).",
+  "type": "object",
+  "required": ["kind"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "kind": { "enum": ["app", "template", "library", "monorepo"] },
+    "runtime": { "enum": ["http-app", "cdn-filter"] },
+    "language": { "enum": ["rust", "js", "assemblyscript"] },
+    "category": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+      "uniqueItems": true
+    },
+    "customer": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "build": {
+      "type": "object",
+      "properties": { "command": { "type": "string" }, "output": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "test": {
+      "type": "object",
+      "properties": { "command": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "instructions": { "type": "string" },
+    "app": { "$ref": "#/$defs/app" },
+    "template": { "$ref": "#/$defs/template" },
+    "environments": {
+      "type": "object",
+      "properties": {
+        "preprod": { "$ref": "#/$defs/environment" },
+        "prod": { "$ref": "#/$defs/environment" }
+      },
+      "additionalProperties": false
+    },
+    "packages": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "app" } } },
+      "then": { "required": ["runtime", "app"], "not": { "anyOf": [{ "required": ["template"] }, { "required": ["packages"] }] } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "template" } } },
+      "then": { "required": ["runtime", "template"], "not": { "anyOf": [{ "required": ["app"] }, { "required": ["packages"] }] } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "library" } } },
+      "then": { "not": { "anyOf": [{ "required": ["app"] }, { "required": ["template"] }, { "required": ["environments"] }, { "required": ["packages"] }] } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "monorepo" } } },
+      "then": { "required": ["packages"], "not": { "anyOf": [{ "required": ["app"] }, { "required": ["template"] }, { "required": ["environments"] }] } }
+    }
+  ],
+  "$defs": {
+    "dict": { "type": "object", "additionalProperties": { "type": "string" } },
+    "app": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer", "minimum": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "comment": { "type": "string" },
+        "env": { "$ref": "#/$defs/dict" },
+        "rsp_headers": { "$ref": "#/$defs/dict" },
+        "secrets": {
+          "description": "ENV_VAR_NAME -> FastEdge secret name (resolved to an id at deploy time).",
+          "$ref": "#/$defs/dict"
+        }
+      },
+      "additionalProperties": false
+    },
+    "template": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer", "minimum": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "params": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string" },
+              "data_type": { "type": "string" },
+              "mandatory": { "type": "boolean" },
+              "descr": { "type": "string" },
+              "metadata": { "type": ["object", "null"] }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "environment": {
+      "type": "object",
+      "properties": {
+        "app": { "type": ["object", "null"] },
+        "template": { "type": ["object", "null"] }
+      },
+      "additionalProperties": false
+    }
+  }
+}

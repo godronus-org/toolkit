@@ -1,0 +1,49 @@
+name: Resolve fastedge.jsonc
+description: Validate a repo's fastedge.jsonc, apply derived defaults and merge one environment's overrides.
+
+inputs:
+  directory:
+    description: Directory holding fastedge.jsonc (a package dir in a monorepo).
+    default: "."
+  environment:
+    description: "preprod or prod. Empty: validate and resolve defaults only."
+    default: ""
+
+outputs:
+  json:
+    description: Whole resolved config as JSON.
+    value: ${{ steps.resolve.outputs.json }}
+  kind:
+    value: ${{ steps.resolve.outputs.kind }}
+  language:
+    value: ${{ steps.resolve.outputs.language }}
+  build:
+    description: '{"command": "...", "output": "..."} as JSON.'
+    value: ${{ steps.resolve.outputs.build }}
+  test:
+    description: '{"command": "..."} as JSON; empty command = no tests (T20).'
+    value: ${{ steps.resolve.outputs.test }}
+  topics:
+    description: JSON array of derived GitHub topics (A3b).
+    value: ${{ steps.resolve.outputs.topics }}
+  app:
+    description: Merged app block for the environment (JSON).
+    value: ${{ steps.resolve.outputs.app }}
+  template:
+    description: Merged template block for the environment (JSON).
+    value: ${{ steps.resolve.outputs.template }}
+  packages:
+    description: Monorepo package dirs (JSON array).
+    value: ${{ steps.resolve.outputs.packages }}
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: npm ci --prefix "$GITHUB_ACTION_PATH" --omit=dev --no-audit --no-fund --silent
+    - id: resolve
+      shell: bash
+      env:
+        DIR: ${{ inputs.directory }}
+        ENVIRONMENT: ${{ inputs.environment }}
+      run: node "$GITHUB_ACTION_PATH/resolve.mjs" "$DIR" $ENVIRONMENT
