@@ -29,8 +29,12 @@ permissions:
   contents: read
 
 jobs:
-  deploy:
+  # Separate job so a skip never starts the deploy job: GitHub evaluates a skipped
+  # step's env/with expressions, and fromJSON('') fails on an unresolved config.
+  target:
     runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ env.ENVIRONMENT }}
     steps:
       - name: Choose environment
         id: target
@@ -56,26 +60,30 @@ jobs:
           echo "Target: $env"
           echo "environment=$env" >> "$GITHUB_OUTPUT"
 
+  deploy:
+    needs: target
+    if: needs.target.outputs.environment != 'skip'
+    runs-on: ubuntu-latest
+    env:
+      ENVIRONMENT: ${{ needs.target.outputs.environment }}
+    steps:
       - uses: actions/checkout@v4
-        if: steps.target.outputs.environment != 'skip'
         with:
           fetch-depth: 0
 
       - name: Refuse tags not on main (T10)
-        if: steps.target.outputs.environment == 'prod'
+        if: env.ENVIRONMENT == 'prod'
         run: |
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
             || { echo "::error::$GITHUB_REF_NAME is not on main — prod deploys only from main"; exit 1; }
 
       - name: Resolve fastedge.jsonc
         id: cfg
-        if: steps.target.outputs.environment != 'skip'
         uses: godronus-org/toolkit/actions/resolve-config@v1
         with:
-          environment: ${{ steps.target.outputs.environment }}
+          environment: ${{ env.ENVIRONMENT }}
 
       - name: Supported config
-        if: steps.target.outputs.environment != 'skip'
         env:
           CONFIG: ${{ steps.cfg.outputs.json }}
         run: |
@@ -88,17 +96,16 @@ jobs:
           fi
 
       - name: Enable pnpm
-        if: steps.target.outputs.environment != 'skip' && steps.cfg.outputs.language != 'rust'
+        if: steps.cfg.outputs.language != 'rust'
         run: corepack enable
         env:
           COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
 
       - name: Test
-        if: steps.target.outputs.environment != 'skip' && !inputs.skip_tests
+        if: '!inputs.skip_tests'
         shell: bash  # pipefail: a failing test command fails the step despite | tee
         env:
           COMMAND: ${{ fromJSON(steps.cfg.outputs.test).command }}
-          ENVIRONMENT: ${{ steps.target.outputs.environment }}
         run: |
           if [ -z "$COMMAND" ]; then
             if [ "$ENVIRONMENT" = prod ]; then
@@ -116,14 +123,12 @@ jobs:
           fi
 
       - name: Build
-        if: steps.target.outputs.environment != 'skip'
         env:
           COMMAND: ${{ fromJSON(steps.cfg.outputs.build).command }}
         run: eval "$COMMAND"
 
       - name: Locate wasm
         id: wasm
-        if: steps.target.outputs.environment != 'skip'
         env:
           OUTPUT: ${{ fromJSON(steps.cfg.outputs.build).output }}
         run: |
@@ -142,8 +147,11 @@ jobs:
         id: instructions
         if: steps.cfg.outputs.kind == 'template'
         env:
-          FILE: ${{ fromJSON(steps.cfg.outputs.template).instructions }}
+          # Step env is evaluated before `if`, so never fromJSON() an output that
+          # may be empty (the template block is empty on app deploys).
+          CONFIG: ${{ steps.cfg.outputs.json }}
         run: |
+          FILE=$(jq -r .template.instructions <<<"$CONFIG")
           {
             echo 'markdown<<__INSTRUCTIONS__'
             if [ -f "$FILE" ]; then cat "$FILE"; else echo "::warning::$FILE not found" >&2; fi
@@ -155,8 +163,8 @@ jobs:
         if: steps.cfg.outputs.kind == 'template'
         uses: gcore-github-actions/fastedge/deploy-template@v1
         with:
-          api_key: ${{ steps.target.outputs.environment == 'prod' && secrets.GCORE_PROD_API_KEY || secrets.GCORE_PREPROD_API_KEY }}
-          api_url: ${{ steps.target.outputs.environment == 'prod' && vars.GCORE_PROD_API_URL || vars.GCORE_PREPROD_API_URL }}
+          api_key: ${{ env.ENVIRONMENT == 'prod' && secrets.GCORE_PROD_API_KEY || secrets.GCORE_PREPROD_API_KEY }}
+          api_url: ${{ env.ENVIRONMENT == 'prod' && vars.GCORE_PROD_API_URL || vars.GCORE_PREPROD_API_URL }}
           wasm_file: ${{ steps.wasm.outputs.path }}
           template_name: ${{ fromJSON(steps.cfg.outputs.template).name }}
           template_id: ${{ fromJSON(steps.cfg.outputs.template).id || 0 }}
@@ -168,8 +176,8 @@ jobs:
         if: steps.cfg.outputs.kind == 'app'
         uses: gcore-github-actions/fastedge/deploy-app@v1
         with:
-          api_key: ${{ steps.target.outputs.environment == 'prod' && secrets.GCORE_PROD_API_KEY || secrets.GCORE_PREPROD_API_KEY }}
-          api_url: ${{ steps.target.outputs.environment == 'prod' && vars.GCORE_PROD_API_URL || vars.GCORE_PREPROD_API_URL }}
+          api_key: ${{ env.ENVIRONMENT == 'prod' && secrets.GCORE_PROD_API_KEY || secrets.GCORE_PREPROD_API_KEY }}
+          api_url: ${{ env.ENVIRONMENT == 'prod' && vars.GCORE_PROD_API_URL || vars.GCORE_PREPROD_API_URL }}
           wasm_file: ${{ steps.wasm.outputs.path }}
           app_name: ${{ fromJSON(steps.cfg.outputs.app).name }}
           app_id: ${{ fromJSON(steps.cfg.outputs.app).id || 0 }}
