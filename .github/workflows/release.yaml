@@ -1,0 +1,35 @@
+name: Release
+
+# Reusable release-please run (G3). Uses the org App token (T11, T17): release
+# PRs then run CI, and the tag created on merge triggers the caller's deploy.
+#
+# Caller:
+#   on: { push: { branches: [main] } }
+#   jobs:
+#     release:
+#       if: github.repository_owner == 'godronus-org'
+#       uses: godronus-org/toolkit/.github/workflows/release.yaml@v1
+#       secrets: inherit
+#
+# The repo needs release-please-config.json and .release-please-manifest.json.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Org App token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.ORG_BOT_APP_ID }}
+          private-key: ${{ secrets.ORG_BOT_APP_PRIVATE_KEY }}
+
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ steps.app.outputs.token }}

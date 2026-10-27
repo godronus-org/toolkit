@@ -1,0 +1,170 @@
+name: Deploy
+
+# Reusable deploy for a single-app repo. The caller only declares triggers;
+# this workflow decides the environment from the event (G1, G1b, T10):
+#   push tag v*               → prod   (only if the tagged commit is on main)
+#   push to main             → preprod (skipped for release-please merges)
+#   workflow_dispatch         → preprod (any branch; may skip tests — H4a)
+#
+# Caller:
+#   on:
+#     push: { branches: [main], tags: ["v*"] }
+#     workflow_dispatch: { inputs: { skip_tests: { type: boolean, default: false } } }
+#   jobs:
+#     deploy:
+#       if: github.repository_owner == 'godronus-org'
+#       uses: godronus-org/toolkit/.github/workflows/deploy.yaml@v1
+#       with: { skip_tests: ${{ inputs.skip_tests || false }} }
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      skip_tests:
+        description: Manual preprod runs only — deploy even if tests are missing or failing (H4a).
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Choose environment
+        id: target
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+          SKIP_TESTS: ${{ inputs.skip_tests }}
+        run: |
+          case "$EVENT:$REF" in
+            push:refs/tags/v*)       env=prod ;;
+            push:refs/heads/main)
+              case "$MESSAGE" in
+                "chore(main): release"*|"chore: release"*) env=skip ;;  # G1b
+                *) env=preprod ;;
+              esac ;;
+            workflow_dispatch:*)     env=preprod ;;
+            *) echo "::error::No deploy target for $EVENT on $REF"; exit 1 ;;
+          esac
+          if [ "$SKIP_TESTS" = true ] && [ "$EVENT" != workflow_dispatch ]; then
+            echo "::error::skip_tests is only allowed on manual preprod runs (H4a)"; exit 1
+          fi
+          echo "Target: $env"
+          echo "environment=$env" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.target.outputs.environment != 'skip'
+        with:
+          fetch-depth: 0
+
+      - name: Refuse tags not on main (T10)
+        if: steps.target.outputs.environment == 'prod'
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "::error::$GITHUB_REF_NAME is not on main — prod deploys only from main"; exit 1; }
+
+      - name: Resolve fastedge.jsonc
+        id: cfg
+        if: steps.target.outputs.environment != 'skip'
+        uses: godronus-org/toolkit/actions/resolve-config@v1
+        with:
+          environment: ${{ steps.target.outputs.environment }}
+
+      - name: Supported config
+        if: steps.target.outputs.environment != 'skip'
+        env:
+          CONFIG: ${{ steps.cfg.outputs.json }}
+        run: |
+          case "$(jq -r .kind <<<"$CONFIG")" in
+            library)  echo "::error::A library has nothing to deploy"; exit 1 ;;
+            monorepo) echo "::error::Monorepo deploys are not implemented yet (T21)"; exit 1 ;;
+          esac
+          if [ "$(jq '.app.secrets // {} | length' <<<"$CONFIG")" != 0 ]; then
+            echo "::error::App secrets are not implemented yet (SCHEMA S-6)"; exit 1
+          fi
+
+      - name: Enable pnpm
+        if: steps.target.outputs.environment != 'skip' && steps.cfg.outputs.language != 'rust'
+        run: corepack enable
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+
+      - name: Test
+        if: steps.target.outputs.environment != 'skip' && !inputs.skip_tests
+        env:
+          COMMAND: ${{ fromJSON(steps.cfg.outputs.test).command }}
+          ENVIRONMENT: ${{ steps.target.outputs.environment }}
+        run: |
+          if [ -z "$COMMAND" ]; then
+            if [ "$ENVIRONMENT" = prod ]; then
+              echo "::error::No test suite found — prod requires one (H4a, T20)"; exit 1
+            fi
+            echo "::warning::No test suite found — allowed for preprod only"; exit 0
+          fi
+          eval "$COMMAND"
+
+      - name: Build
+        if: steps.target.outputs.environment != 'skip'
+        env:
+          COMMAND: ${{ fromJSON(steps.cfg.outputs.build).command }}
+        run: eval "$COMMAND"
+
+      - name: Locate wasm
+        id: wasm
+        if: steps.target.outputs.environment != 'skip'
+        env:
+          OUTPUT: ${{ fromJSON(steps.cfg.outputs.build).output }}
+        run: |
+          if [ -d "$OUTPUT" ]; then
+            files=("$OUTPUT"/*.wasm)
+            if [ "${#files[@]}" -ne 1 ] || [ ! -f "${files[0]}" ]; then
+              echo "::error::Expected exactly one .wasm in $OUTPUT (S-3) — set build.output"; exit 1
+            fi
+            OUTPUT="${files[0]}"
+          fi
+          [ -f "$OUTPUT" ] || { echo "::error::Build output $OUTPUT not found"; exit 1; }
+          echo "Deploying $OUTPUT"
+          echo "path=$OUTPUT" >> "$GITHUB_OUTPUT"
+
+      - name: Read instructions
+        id: instructions
+        if: steps.cfg.outputs.kind == 'template'
+        env:
+          FILE: ${{ fromJSON(steps.cfg.outputs.template).instructions }}
+        run: |
+          {
+            echo 'markdown<<__INSTRUCTIONS__'
+            if [ -f "$FILE" ]; then cat "$FILE"; else echo "::warning::$FILE not found" >&2; fi
+            echo '__INSTRUCTIONS__'
+          } >> "$GITHUB_OUTPUT"
+
+      # One environment's credentials only (same rule as the old gcore-auth action).
+      - name: Deploy template
+        if: steps.cfg.outputs.kind == 'template'
+        uses: gcore-github-actions/fastedge/deploy-template@v1
+        with:
+          api_key: ${{ steps.target.outputs.environment == 'prod' && secrets.GCORE_PROD_API_KEY || secrets.GCORE_PREPROD_API_KEY }}
+          api_url: ${{ steps.target.outputs.environment == 'prod' && vars.GCORE_PROD_API_URL || vars.GCORE_PREPROD_API_URL }}
+          wasm_file: ${{ steps.wasm.outputs.path }}
+          template_name: ${{ fromJSON(steps.cfg.outputs.template).name }}
+          template_id: ${{ fromJSON(steps.cfg.outputs.template).id || 0 }}
+          short_descr: ${{ fromJSON(steps.cfg.outputs.template).description }}
+          long_descr: ${{ steps.instructions.outputs.markdown }}
+          params: ${{ toJSON(fromJSON(steps.cfg.outputs.template).params) }}
+
+      - name: Deploy app
+        if: steps.cfg.outputs.kind == 'app'
+        uses: gcore-github-actions/fastedge/deploy-app@v1
+        with:
+          api_key: ${{ steps.target.outputs.environment == 'prod' && secrets.GCORE_PROD_API_KEY || secrets.GCORE_PREPROD_API_KEY }}
+          api_url: ${{ steps.target.outputs.environment == 'prod' && vars.GCORE_PROD_API_URL || vars.GCORE_PREPROD_API_URL }}
+          wasm_file: ${{ steps.wasm.outputs.path }}
+          app_name: ${{ fromJSON(steps.cfg.outputs.app).name }}
+          app_id: ${{ fromJSON(steps.cfg.outputs.app).id || 0 }}
+          comment: ${{ fromJSON(steps.cfg.outputs.app).comment || '' }}
+          env: ${{ toJSON(fromJSON(steps.cfg.outputs.app).env || fromJSON('{}')) }}
+          rsp_headers: ${{ toJSON(fromJSON(steps.cfg.outputs.app).rsp_headers || fromJSON('{}')) }}
