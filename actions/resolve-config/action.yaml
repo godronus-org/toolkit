@@ -20,9 +20,9 @@ outputs:
   build:
     description: '{"command": "...", "output": "..."} as JSON.'
     value: ${{ steps.resolve.outputs.build }}
-  test:
-    description: '{"command": "..."} as JSON; empty command = no tests (T20).'
-    value: ${{ steps.resolve.outputs.test }}
+  tests:
+    description: 'Test suites as JSON [{"kind", "command"}] — every suite present runs (T20); input for run-tests.'
+    value: ${{ steps.resolve.outputs.tests }}
   topics:
     description: JSON array of derived GitHub topics (A3b).
     value: ${{ steps.resolve.outputs.topics }}

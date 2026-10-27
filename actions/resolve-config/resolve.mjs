@@ -104,13 +104,28 @@ function defaultBuild(dir, language) {
   return { command: 'pnpm install --frozen-lockfile && pnpm build', output: 'wasm' };
 }
 
-// T20: override → package.json "test" script → cargo test. Empty = no tests.
-function defaultTest(dir) {
-  const pkg = readJson(join(dir, 'package.json'));
-  if (pkg?.scripts?.test) return 'pnpm install --frozen-lockfile && pnpm test';
+// Test suites (T20, revised 2026-10-27): every suite present runs. An explicit
+// test.command replaces detection. Each suite: { kind, command }, where kind
+// tells run-tests how to count tests (cargo | fastedge-test | npm | custom).
+function defaultTests(dir) {
+  const suites = [];
   // Host target: crates pin wasm32-wasip1 in .cargo/config.toml, which can't run tests.
-  if (existsSync(join(dir, 'Cargo.toml'))) return inCompiler('cargo test --target x86_64-unknown-linux-gnu');
-  return '';
+  if (existsSync(join(dir, 'Cargo.toml'))) {
+    suites.push({ kind: 'cargo', command: inCompiler('cargo test --target x86_64-unknown-linux-gnu') });
+  }
+  // Rust black-box suite: self-contained Node project (plugin test skill layout).
+  if (readJson(join(dir, 'fastedge-test/package.json'))?.scripts?.test) {
+    suites.push({ kind: 'fastedge-test', command: 'cd fastedge-test && npm ci --no-audit --no-fund && npm test' });
+  }
+  // JS/AS: root test script (runs fastedge-test/app.test.mjs in the skill layout).
+  const rootTest = readJson(join(dir, 'package.json'))?.scripts?.test;
+  if (rootTest) {
+    suites.push({
+      kind: /fastedge-test\//.test(rootTest) ? 'fastedge-test' : 'npm',
+      command: 'pnpm install --frozen-lockfile && pnpm test',
+    });
+  }
+  return suites;
 }
 
 function topics(cfg) {
@@ -144,7 +159,10 @@ export function resolve(dir, environment) {
   const resolved = { ...cfg, language };
   const defaults = defaultBuild(dir, language);
   resolved.build = { ...defaults, ...cfg.build };
-  resolved.test = { command: cfg.test?.command ?? defaultTest(dir) };
+  resolved.tests = cfg.test?.command
+    ? [{ kind: 'custom', command: cfg.test.command }]
+    : defaultTests(dir);
+  delete resolved.test;
   resolved.topics = topics(resolved);
   delete resolved.environments;
   delete resolved.$schema;

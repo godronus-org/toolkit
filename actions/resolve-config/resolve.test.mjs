@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolve, stripJsonc, deepMerge } from './resolve.mjs';
@@ -40,7 +40,7 @@ test('rust template: detected language, cargo defaults, merged env, stringified 
   const pre = resolve(dir, 'preprod');
   assert.equal(pre.language, 'rust');
   assert.equal(pre.build.output, 'target/wasm32-wasip1/release/html_2_md.wasm');
-  assert.match(pre.test.command, /cargo test/);
+  assert.deepEqual(pre.tests.map((t) => t.kind), ['cargo']);
   assert.deepEqual(pre.topics, ['template', 'cdn-filter', 'rust', 'traffic']);
   assert.equal(pre.template.id, 558);
   assert.equal(pre.template.name, 'HTML to MD (preprod)');
@@ -61,7 +61,7 @@ test('js app: build.output fallback ./wasm, no tests → empty test command, cus
   const r = resolve(dir, 'preprod');
   assert.equal(r.language, 'js');
   assert.equal(r.build.output, 'wasm');
-  assert.equal(r.test.command, '');
+  assert.deepEqual(r.tests, []);
   assert.ok(r.topics.includes('customer-orange'));
   assert.deepEqual(r.app, { name: 'orange-a-preprod', env: { K: 'v' }, secrets: { S: 'orange-s' } });
 });
@@ -73,7 +73,7 @@ test('assemblyscript detected from dependency; package test script used', () => 
   });
   const r = resolve(dir);
   assert.equal(r.language, 'assemblyscript');
-  assert.match(r.test.command, /pnpm test/);
+  assert.deepEqual(r.tests.map((t) => t.kind), ['npm']);
 });
 
 test('monorepo returns its package index', () => {
@@ -89,4 +89,29 @@ test('rejects invalid configs', () => {
   bad('{ "kind": "app", "runtime": "http-app", "app": { "name": "a", "bogus": 1 } }'); // unknown field
   bad('{ "kind": "app", "runtime": "http-app", "app": { "name": "a" }, "environments": { "prod": { "app": { "id": "x" } } } }'); // id type after merge
   bad('{ "kind": "app", "runtime": "http-app", "app": { "name": "a" }, "environments": { "staging": {} } }'); // S-5
+});
+
+test('rust test suites: cargo always detected (may run zero), fastedge-test added when present, override replaces both', () => {
+  const cfg = '{ "kind": "template", "runtime": "cdn-filter", "template": { "name": "t" } }';
+  const ft = '{ "scripts": { "test": "node app.test.mjs" } }';
+  const kinds = (files) => {
+    const dir = repo({ 'Cargo.toml': '[package]\nname = "x"', 'fastedge.jsonc': cfg, ...files });
+    return resolve(dir).tests.map((t) => t.kind);
+  };
+  assert.deepEqual(kinds({}), ['cargo']);
+  const both = repo({ 'Cargo.toml': '[package]\nname = "x"', 'fastedge.jsonc': cfg });
+  mkdirSync(join(both, 'fastedge-test'));
+  writeFileSync(join(both, 'fastedge-test/package.json'), ft);
+  assert.deepEqual(resolve(both).tests.map((t) => t.kind), ['cargo', 'fastedge-test']);
+  const over = repo({ 'Cargo.toml': '[package]\nname = "x"',
+    'fastedge.jsonc': '{ "kind": "template", "runtime": "cdn-filter", "template": { "name": "t" }, "test": { "command": "make test" } }' });
+  assert.deepEqual(resolve(over).tests, [{ kind: 'custom', command: 'make test' }]);
+});
+
+test('js root test script pointing at fastedge-test/ is counted as fastedge-test', () => {
+  const dir = repo({
+    'package.json': '{ "scripts": { "test": "node fastedge-test/app.test.mjs" } }',
+    'fastedge.jsonc': '{ "kind": "app", "runtime": "http-app", "app": { "name": "a" } }',
+  });
+  assert.deepEqual(resolve(dir).tests.map((t) => t.kind), ['fastedge-test']);
 });

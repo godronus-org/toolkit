@@ -1,0 +1,19 @@
+name: Run tests
+description: Run every detected test suite and enforce the preprod/prod test rules (H4a, T20).
+
+inputs:
+  tests:
+    description: The `tests` output of resolve-config (JSON array of {kind, command}).
+    required: true
+  strict:
+    description: "true for prod: at least one suite must run > 0 tests."
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        SUITES: ${{ inputs.tests }}
+        STRICT: ${{ inputs.strict }}
+      run: '"$GITHUB_ACTION_PATH/run-tests.sh"'

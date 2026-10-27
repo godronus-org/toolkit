@@ -101,31 +101,18 @@ jobs:
         env:
           COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
 
-      - name: Test
-        if: '!inputs.skip_tests'
-        shell: bash  # pipefail: a failing test command fails the step despite | tee
-        env:
-          COMMAND: ${{ fromJSON(steps.cfg.outputs.test).command }}
-        run: |
-          if [ -z "$COMMAND" ]; then
-            if [ "$ENVIRONMENT" = prod ]; then
-              echo "::error::No test suite found — prod requires one (H4a, T20)"; exit 1
-            fi
-            echo "::warning::No test suite found — allowed for preprod only"; exit 0
-          fi
-          eval "$COMMAND" 2>&1 | tee test.log
-          # T20: a suite that runs zero tests counts as no tests (cargo prints "running N tests").
-          if grep -q '^running [0-9]* tests\?$' test.log && ! grep -q '^running [1-9][0-9]* tests\?$' test.log; then
-            if [ "$ENVIRONMENT" = prod ]; then
-              echo "::error::cargo test ran zero tests — prod requires a test suite (H4a, T20)"; exit 1
-            fi
-            echo "::warning::cargo test ran zero tests — allowed for preprod only"
-          fi
-
       - name: Build
         env:
           COMMAND: ${{ fromJSON(steps.cfg.outputs.build).command }}
         run: eval "$COMMAND"
+
+      # After the build: fastedge-test suites run the built .wasm.
+      - name: Test
+        if: '!inputs.skip_tests'
+        uses: godronus-org/toolkit/actions/run-tests@v1
+        with:
+          tests: ${{ steps.cfg.outputs.tests }}
+          strict: ${{ env.ENVIRONMENT == 'prod' }}
 
       - name: Locate wasm
         id: wasm
