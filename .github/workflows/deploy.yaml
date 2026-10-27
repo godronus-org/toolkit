@@ -34,7 +34,7 @@ jobs:
   target:
     runs-on: ubuntu-latest
     outputs:
-      environment: ${{ env.ENVIRONMENT }}
+      environment: ${{ steps.target.outputs.environment }}
     steps:
       - name: Choose environment
         id: target
@@ -67,6 +67,14 @@ jobs:
     env:
       ENVIRONMENT: ${{ needs.target.outputs.environment }}
     steps:
+      # Fail closed: an empty or unknown target must never resolve or deploy.
+      - name: Check environment
+        run: |
+          case "$ENVIRONMENT" in
+            preprod|prod) echo "Deploying to $ENVIRONMENT" ;;
+            *) echo "::error::Invalid deploy environment '$ENVIRONMENT'"; exit 1 ;;
+          esac
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
