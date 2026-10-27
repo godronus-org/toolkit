@@ -108,7 +108,8 @@ function defaultBuild(dir, language) {
 function defaultTest(dir) {
   const pkg = readJson(join(dir, 'package.json'));
   if (pkg?.scripts?.test) return 'pnpm install --frozen-lockfile && pnpm test';
-  if (existsSync(join(dir, 'Cargo.toml'))) return inCompiler('cargo test');
+  // Host target: crates pin wasm32-wasip1 in .cargo/config.toml, which can't run tests.
+  if (existsSync(join(dir, 'Cargo.toml'))) return inCompiler('cargo test --target x86_64-unknown-linux-gnu');
   return '';
 }
 

@@ -95,6 +95,7 @@ jobs:
 
       - name: Test
         if: steps.target.outputs.environment != 'skip' && !inputs.skip_tests
+        shell: bash  # pipefail: a failing test command fails the step despite | tee
         env:
           COMMAND: ${{ fromJSON(steps.cfg.outputs.test).command }}
           ENVIRONMENT: ${{ steps.target.outputs.environment }}
@@ -105,7 +106,14 @@ jobs:
             fi
             echo "::warning::No test suite found — allowed for preprod only"; exit 0
           fi
-          eval "$COMMAND"
+          eval "$COMMAND" 2>&1 | tee test.log
+          # T20: a suite that runs zero tests counts as no tests (cargo prints "running N tests").
+          if grep -q '^running [0-9]* tests\?$' test.log && ! grep -q '^running [1-9][0-9]* tests\?$' test.log; then
+            if [ "$ENVIRONMENT" = prod ]; then
+              echo "::error::cargo test ran zero tests — prod requires a test suite (H4a, T20)"; exit 1
+            fi
+            echo "::warning::cargo test ran zero tests — allowed for preprod only"
+          fi
 
       - name: Build
         if: steps.target.outputs.environment != 'skip'
