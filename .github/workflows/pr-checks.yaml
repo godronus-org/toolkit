@@ -1,0 +1,38 @@
+name: PR checks
+
+# Org-only PR checks (H1a): Conventional Commit PR title (G3) and the
+# config-path rule — a PR touching fastedge.jsonc must be releasable (T12a).
+# Org-specific security items join here once security-action exists (H5).
+#
+# Caller (in ci.yaml):
+#   org:
+#     if: github.repository_owner == 'godronus-org' && github.event_name == 'pull_request'
+#     uses: godronus-org/toolkit/.github/workflows/pr-checks.yaml@v1
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  title:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Config changes must release (T12a)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ github.event.pull_request.title }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" --name-only | grep -q '\(^\|/\)fastedge\.jsonc$'; then
+            if ! grep -qE '^(fix|feat)(\([^)]*\))?!?:|^[a-z]+(\([^)]*\))?!:' <<<"$TITLE"; then
+              echo "::error::This PR changes fastedge.jsonc, so its title must be releasable (fix:, feat: or a breaking !) — T12a"
+              exit 1
+            fi
+          fi
