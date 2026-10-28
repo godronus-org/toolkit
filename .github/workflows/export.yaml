@@ -67,8 +67,9 @@ jobs:
           TREE: ${{ runner.temp }}/tree
           NOTES: ${{ steps.tree.outputs.notes }}
         run: |
+          # Idempotent: a re-run (redeploy / rollback of this tag) must not fail here.
           if gh api "repos/$MIRROR/git/refs/tags/$GITHUB_REF_NAME" --silent 2>/dev/null; then
-            echo "::error::$MIRROR already has $GITHUB_REF_NAME"; exit 1
+            echo "::notice::$MIRROR already has $GITHUB_REF_NAME — nothing to export"; exit 0
           fi
           git clone --quiet "https://x-access-token:$GH_TOKEN@github.com/$MIRROR.git" "$RUNNER_TEMP/mirror"
           cd "$RUNNER_TEMP/mirror"
