@@ -4,7 +4,9 @@ name: Deploy
 # this workflow decides the environment from the event (G1, G1b, T10):
 #   push tag v*               → prod   (only if the tagged commit is on main)
 #   push to main             → preprod (skipped for release-please merges)
-#   workflow_dispatch         → preprod (any branch; may skip tests — H4a)
+#   workflow_dispatch on a branch → preprod (may skip tests — H4a)
+#   workflow_dispatch on a v* tag → prod: deploy that version (rollback / roll
+#                                   forward to any release, no time limit)
 #
 # Prod deploys the Release's .wasm, the copy of record (T35): the first run
 # builds, tests and attaches <name>.wasm + <name>.wasm.sha256 (never replaced);
@@ -50,7 +52,7 @@ jobs:
           SKIP_TESTS: ${{ inputs.skip_tests }}
         run: |
           case "$EVENT:$REF" in
-            push:refs/tags/v*)       env=prod ;;
+            push:refs/tags/v*|workflow_dispatch:refs/tags/v*) env=prod ;;
             push:refs/heads/main)
               case "$MESSAGE" in
                 "chore(main): release"*|"chore: release"*) env=skip ;;  # G1b
@@ -59,7 +61,7 @@ jobs:
             workflow_dispatch:*)     env=preprod ;;
             *) echo "::error::No deploy target for $EVENT on $REF"; exit 1 ;;
           esac
-          if [ "$SKIP_TESTS" = true ] && [ "$EVENT" != workflow_dispatch ]; then
+          if [ "$SKIP_TESTS" = true ] && { [ "$EVENT" != workflow_dispatch ] || [ "$env" = prod ]; }; then
             echo "::error::skip_tests is only allowed on manual preprod runs (H4a)"; exit 1
           fi
           echo "Target: $env"

@@ -22,7 +22,9 @@ permissions:
 
 jobs:
   export:
-    if: startsWith(github.ref, 'refs/tags/v')
+    # New releases only (tag push). A manual run on an old tag is a rollback —
+    # exporting it would put old code on the mirror's main.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
