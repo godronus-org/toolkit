@@ -93,7 +93,10 @@
             "required": ["name"],
             "properties": {
               "name": { "type": "string" },
-              "data_type": { "type": "string" },
+              "data_type": {
+                "description": "Values accepted by the FastEdge template API (verified 2026-10-28; 'boolean' is rejected — use 'bool').",
+                "enum": ["string", "number", "date", "time", "secret", "store", "bool", "json", "enum"]
+              },
               "mandatory": { "type": "boolean" },
               "descr": { "type": "string" },
               "metadata": { "type": ["object", "null"] }

@@ -89,6 +89,7 @@ test('rejects invalid configs', () => {
   bad('{ "kind": "app", "runtime": "http-app", "app": { "name": "a", "bogus": 1 } }'); // unknown field
   bad('{ "kind": "app", "runtime": "http-app", "app": { "name": "a" }, "environments": { "prod": { "app": { "id": "x" } } } }'); // id type after merge
   bad('{ "kind": "app", "runtime": "http-app", "app": { "name": "a" }, "environments": { "staging": {} } }'); // S-5
+  bad('{ "kind": "template", "runtime": "cdn-filter", "template": { "name": "t", "params": [{ "name": "X", "data_type": "boolean" }] } }'); // API wants "bool"
 });
 
 test('rust test suites: cargo always detected (may run zero), fastedge-test added when present, override replaces both', () => {
