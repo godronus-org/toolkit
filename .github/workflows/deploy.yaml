@@ -6,6 +6,11 @@ name: Deploy
 #   push to main             → preprod (skipped for release-please merges)
 #   workflow_dispatch         → preprod (any branch; may skip tests — H4a)
 #
+# Prod deploys the Release's .wasm, the copy of record (T35): the first run
+# builds, tests and attaches <name>.wasm + <name>.wasm.sha256 (never replaced);
+# every run downloads both, checks the SHA-256 and deploys those exact bytes.
+# Re-running a tag's deploy therefore redeploys the same binary, no rebuild.
+#
 # Caller:
 #   on:
 #     push: { branches: [main], tags: ["v*"] }
@@ -103,27 +108,54 @@ jobs:
             echo "::error::App secrets are not implemented yet (SCHEMA S-6)"; exit 1
           fi
 
+      # Prod deploys the Release's .wasm — the copy of record (T35). It is built,
+      # tested and attached once; a re-run fetches and verifies it instead.
+      - name: Org App token
+        id: app
+        if: env.ENVIRONMENT == 'prod'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.ORG_BOT_APP_ID }}
+          private-key: ${{ secrets.ORG_BOT_APP_PRIVATE_KEY }}
+
+      - name: Release asset
+        id: asset
+        if: env.ENVIRONMENT == 'prod'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          names=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          wasm=$(grep '\.wasm$' <<<"$names" || true)
+          case "$(grep -c . <<<"$wasm")" in
+            0) echo "exists=false" >> "$GITHUB_OUTPUT"; echo "No .wasm on $GITHUB_REF_NAME yet — building it" ;;
+            1) grep -qx "$wasm.sha256" <<<"$names" || { echo "::error::$wasm has no $wasm.sha256 on the release"; exit 1; }
+               echo "exists=true" >> "$GITHUB_OUTPUT"; echo "Release already has $wasm — deploying it, no rebuild" ;;
+            *) echo "::error::$GITHUB_REF_NAME has more than one .wasm asset"; exit 1 ;;
+          esac
+
       - name: Enable pnpm
-        if: steps.cfg.outputs.language != 'rust'
+        if: steps.cfg.outputs.language != 'rust' && steps.asset.outputs.exists != 'true'
         run: corepack enable
         env:
           COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
 
       - name: Build
+        if: steps.asset.outputs.exists != 'true'
         env:
           COMMAND: ${{ fromJSON(steps.cfg.outputs.build).command }}
         run: eval "$COMMAND"
 
       # After the build: fastedge-test suites run the built .wasm.
       - name: Test
-        if: '!inputs.skip_tests'
+        if: '!inputs.skip_tests && steps.asset.outputs.exists != ''true'''
         uses: godronus-org/toolkit/actions/run-tests@v1
         with:
           tests: ${{ steps.cfg.outputs.tests }}
           strict: ${{ env.ENVIRONMENT == 'prod' }}
 
       - name: Locate wasm
-        id: wasm
+        id: built
+        if: steps.asset.outputs.exists != 'true'
         env:
           OUTPUT: ${{ fromJSON(steps.cfg.outputs.build).output }}
         run: |
@@ -135,8 +167,42 @@ jobs:
             OUTPUT="${files[0]}"
           fi
           [ -f "$OUTPUT" ] || { echo "::error::Build output $OUTPUT not found"; exit 1; }
-          echo "Deploying $OUTPUT"
+          echo "Built $OUTPUT"
           echo "path=$OUTPUT" >> "$GITHUB_OUTPUT"
+
+      - name: Attach wasm + SHA-256 to the release
+        if: env.ENVIRONMENT == 'prod' && steps.asset.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          BUILT: ${{ steps.built.outputs.path }}
+        run: |
+          name=$(basename "$BUILT")
+          dir="$RUNNER_TEMP/upload" && mkdir -p "$dir" && cp "$BUILT" "$dir/$name"
+          (cd "$dir" && sha256sum "$name" > "$name.sha256" && cat "$name.sha256")
+          # No --clobber: an asset of record is never replaced.
+          gh release upload "$GITHUB_REF_NAME" "$dir/$name" "$dir/$name.sha256" --repo "$GITHUB_REPOSITORY"
+
+      - name: Fetch and verify the release asset
+        id: verified
+        if: env.ENVIRONMENT == 'prod'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          dir="$RUNNER_TEMP/release" && mkdir -p "$dir" && cd "$dir"
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern '*.wasm' --pattern '*.wasm.sha256'
+          sha256sum -c ./*.sha256
+          echo "path=$dir/$(ls ./*.wasm | xargs basename)" >> "$GITHUB_OUTPUT"
+
+      - name: Wasm to deploy
+        id: wasm
+        env:
+          VERIFIED: ${{ steps.verified.outputs.path }}
+          BUILT: ${{ steps.built.outputs.path }}
+        run: |
+          path=${VERIFIED:-$BUILT}
+          [ -f "$path" ] || { echo "::error::nothing to deploy"; exit 1; }
+          echo "Deploying $path ($(sha256sum "$path" | cut -d' ' -f1))"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
 
       - name: Read instructions
         id: instructions
