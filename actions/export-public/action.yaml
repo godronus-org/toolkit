@@ -1,0 +1,37 @@
+name: Export public mirror tree
+description: Build the public mirror tree from .github/mirror.jsonc and the .github/mirror/ overlay, with the leak guard, and strip org links from release notes (T34).
+
+inputs:
+  out:
+    description: Empty directory to write the tree into.
+    required: true
+  notes:
+    description: Release notes to strip (may be empty).
+    default: ""
+
+outputs:
+  repo:
+    description: Mirror repo name (no owner).
+    value: ${{ steps.tree.outputs.repo }}
+  notes:
+    description: Release notes with links into the org removed.
+    value: ${{ steps.notes.outputs.notes }}
+
+runs:
+  using: composite
+  steps:
+    - id: tree
+      shell: bash
+      env:
+        OUT: ${{ inputs.out }}
+      run: echo "repo=$(node "$GITHUB_ACTION_PATH/export.mjs" tree . "$OUT" "$GITHUB_REPOSITORY")" >> "$GITHUB_OUTPUT"
+    - id: notes
+      shell: bash
+      env:
+        NOTES: ${{ inputs.notes }}
+      run: |
+        {
+          echo 'notes<<__NOTES__'
+          node "$GITHUB_ACTION_PATH/export.mjs" notes "$GITHUB_REPOSITORY_OWNER" <<<"$NOTES"
+          echo '__NOTES__'
+        } >> "$GITHUB_OUTPUT"

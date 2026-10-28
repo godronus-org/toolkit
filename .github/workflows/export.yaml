@@ -1,0 +1,80 @@
+name: Export
+
+# Reusable public-mirror export (T34): one commit per release on the mirror's
+# main, tagged with the release tag, plus a GitHub Release. Config lives in
+# .github/mirror.jsonc (allow-list) and .github/mirror/ (overlay), not in
+# fastedge.jsonc. The mirror is the repo's name without "private-" and must
+# already exist. Everything goes through the leak guard.
+#
+# Caller (runs on the release tag, after the prod deploy):
+#   export:
+#     needs: deploy
+#     uses: godronus-org/toolkit/.github/workflows/export.yaml@v1
+#     secrets: inherit
+#
+# The org App needs contents + workflows write on the mirror.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Release notes
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo 'body<<__NOTES__'
+            gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json body --jq .body || true
+            echo '__NOTES__'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build tree
+        id: tree
+        uses: godronus-org/toolkit/actions/export-public@v1
+        with:
+          out: ${{ runner.temp }}/tree
+          notes: ${{ steps.release.outputs.body }}
+
+      - name: Org App token (mirror only)
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.ORG_BOT_APP_ID }}
+          private-key: ${{ secrets.ORG_BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.tree.outputs.repo }}
+
+      - name: Commit, tag and push
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          MIRROR: ${{ github.repository_owner }}/${{ steps.tree.outputs.repo }}
+          SLUG: ${{ steps.app.outputs.app-slug }}
+          TREE: ${{ runner.temp }}/tree
+          NOTES: ${{ steps.tree.outputs.notes }}
+        run: |
+          if gh api "repos/$MIRROR/git/refs/tags/$GITHUB_REF_NAME" --silent 2>/dev/null; then
+            echo "::error::$MIRROR already has $GITHUB_REF_NAME"; exit 1
+          fi
+          git clone --quiet "https://x-access-token:$GH_TOKEN@github.com/$MIRROR.git" "$RUNNER_TEMP/mirror"
+          cd "$RUNNER_TEMP/mirror"
+          git checkout -q -B main
+          rsync -a --delete --exclude .git "$TREE/" .
+          bot_id=$(gh api "users/$SLUG%5Bbot%5D" --jq .id)
+          git add -A
+          # --allow-empty: a config-only release still gets its one commit + tag.
+          git -c user.name="$SLUG[bot]" -c user.email="$bot_id+$SLUG[bot]@users.noreply.github.com" \
+            commit --quiet --allow-empty -m "release: $GITHUB_REF_NAME" -m "$NOTES"
+          git tag "$GITHUB_REF_NAME"
+          git push --quiet origin main "$GITHUB_REF_NAME"
+          gh release create "$GITHUB_REF_NAME" --repo "$MIRROR" --title "$GITHUB_REF_NAME" --notes "$NOTES" --verify-tag
+          echo "Exported $GITHUB_REF_NAME to https://github.com/$MIRROR"
