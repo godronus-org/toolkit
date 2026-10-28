@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    env:
+      COMPILER: viridiscomms/fastedge-apps-compiler:0.0.2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: docker run --rm -v "$PWD":/work -w /work "$COMPILER" cargo test --target x86_64-unknown-linux-gnu
+      - name: Build
+        run: docker run --rm -v "$PWD":/work -w /work "$COMPILER" cargo build --release --target wasm32-wasip1
+      # Black-box suite runs the built .wasm, so it comes after the build.
+      - name: fastedge-test
+        if: hashFiles('fastedge-test/package.json') != ''
+        working-directory: fastedge-test
+        run: npm ci --no-audit --no-fund && npm test

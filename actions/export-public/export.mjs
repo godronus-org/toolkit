@@ -2,12 +2,15 @@
 // Builds the public mirror tree for a release (T34). Org machinery, kept out of
 // fastedge.jsonc (app config that may become public — FUTURE F-7):
 //   .github/mirror.jsonc  { "include": [globs], "repo"?: name }  — opts the repo in
-//   .github/mirror/**     overlay copied to the mirror root (wins over the allow-list)
+//   .github/mirror/**     exceptions only: overlay copied to the mirror root (wins)
+// The public CI and Deploy workflows are generated from templates/public/<language>/
+// using the resolved fastedge.jsonc, so no repo carries its own copy.
 // The mirror is the repo's own name without "private-" unless "repo" says otherwise.
 // Fails closed on anything internal (leak guard).
 //
 // Usage:
-//   export.mjs tree <src-dir> <out-dir> <owner/private-repo>   (prints the mirror name)
+//   CONFIG='<resolve-config json>' export.mjs tree <src-dir> <out-dir> <owner/private-repo>
+//   (prints the mirror name)
 //   export.mjs notes <owner> < release-notes.md > public-notes.md
 // CHANGELOG.md and release notes are published with links into the org
 // stripped — they point at private repos and would 404 publicly.
@@ -60,10 +63,45 @@ export function readMirrorConfig(srcDir, privateRepo) {
   return { repo, include: cfg.include };
 }
 
+const TEMPLATES = fileURLToPath(new URL('../../templates/public/', import.meta.url));
+
+// Customer-facing CI + Deploy for a template or app (T25c: standard actions and
+// deploy-app only). Env is seeded from template param defaults, or the app's env
+// keys with empty values (ours are internal). Returns Map dest → content.
+export function publicWorkflows(cfg, repo) {
+  const dir = join(TEMPLATES, cfg.language ?? '');
+  const target = cfg[cfg.kind];
+  if (!['template', 'app'].includes(cfg.kind) || !cfg.language || !existsSync(dir)) return new Map();
+  const params = cfg.kind === 'template' ? (target.params ?? []) : [];
+  const env = cfg.kind === 'template'
+    ? Object.fromEntries(params.filter((p) => p.data_type !== 'secret')
+        .map((p) => [p.name, String(p.metadata?.default_value ?? '')]))
+    : Object.fromEntries(Object.keys(target.env ?? {}).map((k) => [k, '']));
+  const secrets = cfg.kind === 'template'
+    ? params.filter((p) => p.data_type === 'secret').map((p) => p.name)
+    : Object.keys(target.secrets ?? {});
+  const vars = {
+    WASM: cfg.build.output,
+    NAME: repo,
+    COMMENT: target.description ?? target.comment ?? repo,
+    ENV: JSON.stringify(env),
+  };
+  const out = new Map();
+  for (const file of readdirSync(dir)) {
+    let text = readFileSync(join(dir, file), 'utf8')
+      .replace(/\{\{(\w+)\}\}/g, (_, k) => JSON.stringify(vars[k])); // JSON string = valid YAML scalar
+    if (file === 'deploy.yaml' && secrets.length) {
+      text += `# Also needs secret(s) ${secrets.join(', ')}: create them in the portal and attach them to the app.\n`;
+    }
+    out.set(`.github/workflows/${file}`, Buffer.from(text));
+  }
+  return out;
+}
+
 const tracked = (dir) =>
   execFileSync('git', ['ls-files', '-z'], { cwd: dir, encoding: 'utf8' }).split('\0').filter(Boolean);
 
-export function exportTree(srcDir, outDir, owner, include) {
+export function exportTree(srcDir, outDir, owner, include, generated = new Map()) {
   if (existsSync(outDir) && readdirSync(outDir).length) throw new Error(`${outDir} is not empty`);
 
   const patterns = include.map(globToRegExp);
@@ -78,7 +116,7 @@ export function exportTree(srcDir, outDir, owner, include) {
   }
   if (!copies.size) throw new Error('export matched no files');
 
-  const contents = new Map();
+  const contents = new Map([...generated].filter(([dest]) => !copies.has(dest))); // overlay wins
   for (const [dest, src] of copies) {
     const body = readFileSync(join(srcDir, src));
     contents.set(dest, dest === 'CHANGELOG.md' ? Buffer.from(stripOrgLinks(body.toString('utf8'), owner)) : body);
@@ -110,7 +148,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       const [srcDir, outDir, privateRepo] = args;
       const owner = privateRepo.split('/')[0];
       const { repo, include } = readMirrorConfig(srcDir, privateRepo);
-      const files = exportTree(srcDir, outDir, owner, include);
+      const cfg = JSON.parse(process.env.CONFIG || 'null');
+      if (!cfg) throw new Error('CONFIG (resolve-config json) is required');
+      const generated = publicWorkflows(cfg, repo);
+      if (!generated.size) console.error(`::warning::no public workflow template for ${cfg.kind}/${cfg.language} — mirror gets none unless .github/mirror/ provides them`);
+      const files = exportTree(srcDir, outDir, owner, include, generated);
       console.error(`Exporting ${files.length} files to ${owner}/${repo}:\n  ${files.join('\n  ')}`);
       console.log(repo);
     } else {

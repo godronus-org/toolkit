@@ -2,8 +2,8 @@ name: Export
 
 # Reusable public-mirror export (T34): one commit per release on the mirror's
 # main, tagged with the release tag, plus a GitHub Release. Config lives in
-# .github/mirror.jsonc (allow-list) and .github/mirror/ (overlay), not in
-# fastedge.jsonc. The mirror is the repo's name without "private-" and must
+# .github/mirror.jsonc (allow-list) and .github/mirror/ (exceptions overlay), not in
+# fastedge.jsonc; public CI/Deploy are generated from templates/public/. The mirror is the repo's name without "private-" and must
 # already exist. Everything goes through the leak guard.
 #
 # Caller (runs on the release tag, after the prod deploy):
@@ -27,6 +27,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Resolve fastedge.jsonc
+        id: cfg
+        uses: godronus-org/toolkit/actions/resolve-config@v1
+
       - name: Release notes
         id: release
         env:
@@ -42,6 +46,7 @@ jobs:
         id: tree
         uses: godronus-org/toolkit/actions/export-public@v1
         with:
+          config: ${{ steps.cfg.outputs.json }}
           out: ${{ runner.temp }}/tree
           notes: ${{ steps.release.outputs.body }}
 

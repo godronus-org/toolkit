@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { exportTree, globToRegExp, readMirrorConfig, stripOrgLinks } from './export.mjs';
+import { exportTree, globToRegExp, publicWorkflows, readMirrorConfig, stripOrgLinks } from './export.mjs';
 
 const INCLUDE = ['src/**', 'Cargo.toml', 'CHANGELOG.md'];
 
@@ -78,4 +78,35 @@ test('CHANGELOG: org links stripped, text kept', () => {
 
 test('empty match fails', () => {
   assert.throws(() => exportTree(repo({ 'a.txt': '' }), out(), 'acme', INCLUDE), /matched no files/);
+});
+
+test('public workflows: generated per language, env from param defaults, overlay wins', () => {
+  const cfg = {
+    kind: 'template', language: 'rust', build: { output: 'target/wasm32-wasip1/release/x.wasm' },
+    template: { description: 'Does "x"', params: [
+      { name: 'MODE', data_type: 'string', metadata: { default_value: '*' } },
+      { name: 'FLAG', data_type: 'bool' },
+      { name: 'KEY', data_type: 'secret' },
+    ] },
+  };
+  const gen = publicWorkflows(cfg, 'x');
+  assert.deepEqual([...gen.keys()].sort(), ['.github/workflows/ci.yaml', '.github/workflows/deploy.yaml']);
+  const deploy = gen.get('.github/workflows/deploy.yaml').toString();
+  assert.ok(deploy.includes('wasm_file: "target/wasm32-wasip1/release/x.wasm"'));
+  assert.ok(deploy.includes('app_name: "x"'));
+  assert.ok(deploy.includes('comment: "Does \\"x\\""'));
+  assert.ok(deploy.includes('env: "{\\"MODE\\":\\"*\\",\\"FLAG\\":\\"\\"}"'));
+  assert.ok(deploy.includes('secret(s) KEY'));
+  assert.ok(!/\{\{[A-Z]+\}\}/.test(deploy)); // no placeholder left
+  const app = publicWorkflows({ kind: 'app', language: 'rust', build: { output: 'o.wasm' },
+    app: { env: { INTERNAL: 'secret-ish' } } }, 'y').get('.github/workflows/deploy.yaml').toString();
+  assert.ok(app.includes('env: "{\\"INTERNAL\\":\\"\\"}"') && !app.includes('secret-ish'));
+  assert.equal(publicWorkflows({ kind: 'library', language: 'rust' }, 'z').size, 0);
+  assert.equal(publicWorkflows({ kind: 'app', language: 'go', app: {} }, 'z').size, 0);
+
+  const dir = repo({ 'src/a.rs': '', '.github/mirror/.github/workflows/ci.yaml': 'custom' });
+  const o = out();
+  const files = exportTree(dir, o, 'acme', INCLUDE, gen);
+  assert.deepEqual(files, ['.github/workflows/ci.yaml', '.github/workflows/deploy.yaml', 'src/a.rs']);
+  assert.equal(readFileSync(join(o, '.github/workflows/ci.yaml'), 'utf8'), 'custom');
 });

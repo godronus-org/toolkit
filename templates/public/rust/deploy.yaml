@@ -1,0 +1,29 @@
+# Deploy this as your own FastEdge app.
+# 1. Add a repository secret GCORE_API_KEY (your Gcore API token).
+# 2. Review the app name and env below.
+# 3. Actions → Deploy → Run workflow.
+# Runs only when started by hand; add a push trigger to deploy on every change.
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: >
+          docker run --rm -v "$PWD":/work -w /work viridiscomms/fastedge-apps-compiler:0.0.2
+          cargo build --release --target wasm32-wasip1
+      - uses: gcore-github-actions/fastedge/deploy-app@v1
+        with:
+          api_key: ${{ secrets.GCORE_API_KEY }}
+          wasm_file: {{WASM}}
+          app_name: {{NAME}}
+          comment: {{COMMENT}}
+          env: {{ENV}}

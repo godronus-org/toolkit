@@ -1,7 +1,10 @@
 name: Export public mirror tree
-description: Build the public mirror tree from .github/mirror.jsonc and the .github/mirror/ overlay, with the leak guard, and strip org links from release notes (T34).
+description: Build the public mirror tree from .github/mirror.jsonc, generated public workflows and the .github/mirror/ overlay, with the leak guard, and strip org links from release notes (T34).
 
 inputs:
+  config:
+    description: Resolved fastedge.jsonc (resolve-config output `json`) — drives the generated public workflows.
+    required: true
   out:
     description: Empty directory to write the tree into.
     required: true
@@ -23,6 +26,7 @@ runs:
     - id: tree
       shell: bash
       env:
+        CONFIG: ${{ inputs.config }}
         OUT: ${{ inputs.out }}
       run: echo "repo=$(node "$GITHUB_ACTION_PATH/export.mjs" tree . "$OUT" "$GITHUB_REPOSITORY")" >> "$GITHUB_OUTPUT"
     - id: notes
