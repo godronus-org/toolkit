@@ -253,6 +253,7 @@ jobs:
           echo "comment=$comment" >> "$GITHUB_OUTPUT"
 
       - name: Deploy app
+        id: deployapp
         if: steps.cfg.outputs.kind == 'app'
         uses: gcore-github-actions/fastedge/deploy-app@v1
         with:
@@ -264,3 +265,17 @@ jobs:
           comment: ${{ steps.marker.outputs.comment }}
           env: ${{ toJSON(fromJSON(steps.cfg.outputs.app).env || fromJSON('{}')) }}
           rsp_headers: ${{ toJSON(fromJSON(steps.cfg.outputs.app).rsp_headers || fromJSON('{}')) }}
+
+      - name: Summary
+        if: steps.cfg.outputs.kind == 'app'
+        env:
+          APP_ID: ${{ steps.deployapp.outputs.app_id }}
+          APP_URL: ${{ steps.deployapp.outputs.app_url }}
+          WASM: ${{ steps.wasm.outputs.path }}
+        run: |
+          {
+            echo "### Deployed to $ENVIRONMENT"
+            echo "- app id: \`$APP_ID\`"
+            echo "- url: $APP_URL"
+            echo "- wasm sha256: \`$(sha256sum "$WASM" | cut -d' ' -f1)\`"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
