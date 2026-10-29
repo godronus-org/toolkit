@@ -106,9 +106,6 @@ jobs:
             library)  echo "::error::A library has nothing to deploy"; exit 1 ;;
             monorepo) echo "::error::Monorepo deploys are not implemented yet (T21)"; exit 1 ;;
           esac
-          if [ "$(jq '.app.secrets // {} | length' <<<"$CONFIG")" != 0 ]; then
-            echo "::error::App secrets are not implemented yet (SCHEMA S-6)"; exit 1
-          fi
 
       # Prod deploys the Release's .wasm — the copy of record (T35). It is built,
       # tested and attached once; a re-run fetches and verifies it instead.
@@ -235,6 +232,29 @@ jobs:
           long_descr: ${{ steps.instructions.outputs.markdown }}
           params: ${{ toJSON(fromJSON(steps.cfg.outputs.template).params) }}
 
+      # S-6: fastedge.jsonc maps ENV -> FastEdge secret *name*; the value is created
+      # in the portal, never in git. Resolve each name to its id in the target
+      # account; a missing secret fails the deploy.
+      - name: Resolve secrets
+        id: secrets
+        if: steps.cfg.outputs.kind == 'app'
+        env:
+          APP: ${{ steps.cfg.outputs.app }}
+          API_KEY: ${{ env.ENVIRONMENT == 'prod' && secrets.GCORE_PROD_API_KEY || secrets.GCORE_PREPROD_API_KEY }}
+          API_URL: ${{ env.ENVIRONMENT == 'prod' && vars.GCORE_PROD_API_URL || vars.GCORE_PREPROD_API_URL }}
+        run: |
+          out='{}'
+          while IFS=$'\t' read -r envname secret; do
+            [ -n "$envname" ] || continue
+            id=$(curl -sS --fail-with-body -G "$API_URL/fastedge/v1/secrets" \
+                   -H "Authorization: APIKey $API_KEY" --data-urlencode "secret_name=$secret" \
+                 | jq --arg n "$secret" '[.secrets[] | select(.name == $n) | .id] | if length == 1 then .[0] else empty end')
+            [ -n "$id" ] || { echo "::error::FastEdge secret '$secret' (for $envname) not found in the $ENVIRONMENT account — create it in the portal"; exit 1; }
+            echo "$envname -> $secret ($id)"
+            out=$(jq -c --arg k "$envname" --argjson v "$id" '. + {($k): $v}' <<<"$out")
+          done < <(jq -r '.secrets // {} | to_entries[] | [.key, .value] | @tsv' <<<"$APP")
+          echo "json=$out" >> "$GITHUB_OUTPUT"
+
       # IaC marker (E14, frontend GH-18): the portal's Deployments tab shows a
       # marked app read-only, with the live version and where to deploy/roll back.
       - name: IaC marker
@@ -265,6 +285,7 @@ jobs:
           comment: ${{ steps.marker.outputs.comment }}
           env: ${{ toJSON(fromJSON(steps.cfg.outputs.app).env || fromJSON('{}')) }}
           rsp_headers: ${{ toJSON(fromJSON(steps.cfg.outputs.app).rsp_headers || fromJSON('{}')) }}
+          secrets: ${{ steps.secrets.outputs.json }}
 
       - name: Summary
         if: steps.cfg.outputs.kind == 'app'
