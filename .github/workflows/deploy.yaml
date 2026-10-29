@@ -235,6 +235,23 @@ jobs:
           long_descr: ${{ steps.instructions.outputs.markdown }}
           params: ${{ toJSON(fromJSON(steps.cfg.outputs.template).params) }}
 
+      # IaC marker (E14, frontend GH-18): the portal's Deployments tab shows a
+      # marked app read-only, with the live version and where to deploy/roll back.
+      - name: IaC marker
+        id: marker
+        if: steps.cfg.outputs.kind == 'app'
+        env:
+          APP: ${{ steps.cfg.outputs.app }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          if [ "$ENVIRONMENT" = prod ]; then version=$GITHUB_REF_NAME; else version="$GITHUB_REF_NAME@${GITHUB_SHA::7}"; fi
+          file=${WORKFLOW_REF%@*}; file=${file##*/}
+          comment="Managed by IaC (fastedge.jsonc) $version: https://github.com/$GITHUB_REPOSITORY/actions/workflows/$file"
+          extra=$(jq -r '.comment // empty' <<<"$APP")
+          [ -n "$extra" ] && comment="$comment — $extra"
+          echo "$comment"
+          echo "comment=$comment" >> "$GITHUB_OUTPUT"
+
       - name: Deploy app
         if: steps.cfg.outputs.kind == 'app'
         uses: gcore-github-actions/fastedge/deploy-app@v1
@@ -244,6 +261,6 @@ jobs:
           wasm_file: ${{ steps.wasm.outputs.path }}
           app_name: ${{ fromJSON(steps.cfg.outputs.app).name }}
           app_id: ${{ fromJSON(steps.cfg.outputs.app).id || 0 }}
-          comment: ${{ fromJSON(steps.cfg.outputs.app).comment || '' }}
+          comment: ${{ steps.marker.outputs.comment }}
           env: ${{ toJSON(fromJSON(steps.cfg.outputs.app).env || fromJSON('{}')) }}
           rsp_headers: ${{ toJSON(fromJSON(steps.cfg.outputs.app).rsp_headers || fromJSON('{}')) }}
