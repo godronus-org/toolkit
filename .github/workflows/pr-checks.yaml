@@ -1,7 +1,9 @@
 name: PR checks
 
-# Org-only PR checks (H1a): Conventional Commit PR title (G3) and the
-# config-path rule — a PR touching fastedge.jsonc must be releasable (T12a).
+# Org-only PR checks (H1a): Conventional Commit PR title (G3), the
+# config-path rule — a PR touching fastedge.jsonc must be releasable (T12a) —
+# and fastedge.jsonc itself must resolve for every environment, so a broken
+# config fails here instead of at deploy.
 # Org-specific security items join here once security-action exists (H5).
 #
 # Caller (in ci.yaml):
@@ -36,3 +38,22 @@ jobs:
               exit 1
             fi
           fi
+
+  config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Same resolver as deploy: schema, derived defaults, and each environment's merge.
+      - name: Resolve (no environment)
+        id: base
+        uses: godronus-org/toolkit/actions/resolve-config@v1
+      - name: Resolve preprod
+        if: contains(fromJSON('["app","template"]'), steps.base.outputs.kind)
+        uses: godronus-org/toolkit/actions/resolve-config@v1
+        with:
+          environment: preprod
+      - name: Resolve prod
+        if: contains(fromJSON('["app","template"]'), steps.base.outputs.kind)
+        uses: godronus-org/toolkit/actions/resolve-config@v1
+        with:
+          environment: prod

@@ -2,6 +2,23 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": "godronus-org preset: repos extend github>godronus-org/toolkit (C8, T12b, T13).",
   "extends": ["config:recommended", ":semanticCommits"],
+  "github-actions": {
+    "description": "Also bump actions in the toolkit's public workflow templates (T34).",
+    "managerFilePatterns": ["/^templates/public/.+\\.ya?ml$/"]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Compiler image pinned in workflows, public templates and resolve-config (B6b).",
+      "managerFilePatterns": [
+        "/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/",
+        "/^templates/public/.+\\.ya?ml$/",
+        "/^actions/resolve-config/resolve\\.mjs$/"
+      ],
+      "matchStrings": ["(?<depName>viridiscomms/fastedge-apps-compiler):(?<currentValue>[\\w.-]+)"],
+      "datasourceTemplate": "docker"
+    }
+  ],
   "packageRules": [
     {
       "description": "T13: every bump of an org library is fix(deps), so it releases the consumer. Third-party bumps stay chore(deps) (T12b).",

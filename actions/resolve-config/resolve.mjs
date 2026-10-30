@@ -71,11 +71,20 @@ function crateName(dir) {
 const inCompiler = (cmd) =>
   `docker run --rm -v "$PWD":/work -w /work ${COMPILER_IMAGE} ${cmd}`;
 
+// The crate's own target ([build] target in .cargo/config.toml), else wasip1.
+// Async (wstd) apps pin wasm32-wasip2.
+export function rustTarget(dir) {
+  const path = join(dir, '.cargo/config.toml');
+  const config = existsSync(path) ? readFileSync(path, 'utf8') : '';
+  return config.match(/^\s*target\s*=\s*"([^"]+)"/m)?.[1] ?? 'wasm32-wasip1';
+}
+
 function defaultBuild(dir, language) {
   if (language === 'rust') {
+    const target = rustTarget(dir);
     return {
-      command: inCompiler('cargo build --release --target wasm32-wasip1'),
-      output: `target/wasm32-wasip1/release/${crateName(dir)}.wasm`,
+      command: inCompiler(`cargo build --release --target ${target}`),
+      output: `target/${target}/release/${crateName(dir)}.wasm`,
     };
   }
   return { command: 'pnpm install --frozen-lockfile && pnpm build', output: 'wasm' };
@@ -86,7 +95,7 @@ function defaultBuild(dir, language) {
 // tells run-tests how to count tests (cargo | fastedge-test | npm | custom).
 function defaultTests(dir) {
   const suites = [];
-  // Host target: crates pin wasm32-wasip1 in .cargo/config.toml, which can't run tests.
+  // Host target: crates pin a wasm target in .cargo/config.toml, which can't run tests.
   if (existsSync(join(dir, 'Cargo.toml'))) {
     suites.push({ kind: 'cargo', command: inCompiler('cargo test --target x86_64-unknown-linux-gnu') });
   }

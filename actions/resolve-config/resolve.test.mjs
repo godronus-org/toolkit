@@ -2,12 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { resolve, stripJsonc, deepMerge } from './resolve.mjs';
 
 function repo(files) {
   const dir = mkdtempSync(join(tmpdir(), 'fastedge-'));
-  for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body);
+  for (const [name, body] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, name)), { recursive: true });
+    writeFileSync(join(dir, name), body);
+  }
   return dir;
 }
 
@@ -115,4 +118,16 @@ test('js root test script pointing at fastedge-test/ is counted as fastedge-test
     'fastedge.jsonc': '{ "kind": "app", "runtime": "http-app", "app": { "name": "a" } }',
   });
   assert.deepEqual(resolve(dir).tests.map((t) => t.kind), ['fastedge-test']);
+});
+
+test('rust target from .cargo/config.toml (wasip2 for async apps), else wasip1', () => {
+  const app = (files) => repo({
+    'Cargo.toml': '[package]\nname = "a-b"\n',
+    'fastedge.jsonc': '{ "kind": "app", "runtime": "http-app", "app": { "name": "a" } }',
+    ...files,
+  });
+  const p2 = resolve(app({ '.cargo/config.toml': '[build]\ntarget = "wasm32-wasip2"\n' }));
+  assert.match(p2.build.command, /cargo build --release --target wasm32-wasip2$/);
+  assert.equal(p2.build.output, 'target/wasm32-wasip2/release/a_b.wasm');
+  assert.equal(resolve(app({})).build.output, 'target/wasm32-wasip1/release/a_b.wasm');
 });
