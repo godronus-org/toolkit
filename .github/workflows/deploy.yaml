@@ -7,6 +7,8 @@ name: Deploy
 #   workflow_dispatch on a branch → preprod (may skip tests — H4a)
 #   workflow_dispatch on a v* tag → prod: deploy that version (rollback / roll
 #                                   forward to any release, no time limit)
+# A library (kind "library") deploys nothing: on a v* tag it only runs the
+# tests, so the caller's export job publishes the release (T34 Libraries).
 #
 # Prod deploys the Release's .wasm, the copy of record (T35): the first run
 # builds, tests and attaches <name>.wasm + <name>.wasm.sha256 (never replaced);
@@ -43,9 +45,16 @@ jobs:
     outputs:
       environment: ${{ steps.target.outputs.environment }}
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve fastedge.jsonc
+        id: cfg
+        uses: godronus-org/toolkit/actions/resolve-config@v1
+
       - name: Choose environment
         id: target
         env:
+          KIND: ${{ steps.cfg.outputs.kind }}
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
           MESSAGE: ${{ github.event.head_commit.message }}
@@ -64,12 +73,40 @@ jobs:
           if [ "$SKIP_TESTS" = true ] && { [ "$EVENT" != workflow_dispatch ] || [ "$env" = prod ]; }; then
             echo "::error::skip_tests is only allowed on manual preprod runs (H4a)"; exit 1
           fi
+          # A library has no environments: its v* tag is tested, then exported.
+          if [ "$KIND" = library ]; then
+            if [ "$env" = prod ]; then env=library; else env=skip; fi
+          fi
           echo "Target: $env"
           echo "environment=$env" >> "$GITHUB_OUTPUT"
 
+  library:
+    needs: target
+    if: needs.target.outputs.environment == 'library'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Refuse tags not on main (T10)
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "::error::$GITHUB_REF_NAME is not on main — releases only from main"; exit 1; }
+
+      - name: Resolve fastedge.jsonc
+        id: cfg
+        uses: godronus-org/toolkit/actions/resolve-config@v1
+
+      - name: Test
+        uses: godronus-org/toolkit/actions/run-tests@v1
+        with:
+          tests: ${{ steps.cfg.outputs.tests }}
+          strict: true
+
   deploy:
     needs: target
-    if: needs.target.outputs.environment != 'skip'
+    if: contains(fromJSON('["preprod","prod"]'), needs.target.outputs.environment)
     runs-on: ubuntu-latest
     env:
       ENVIRONMENT: ${{ needs.target.outputs.environment }}
@@ -103,7 +140,6 @@ jobs:
           CONFIG: ${{ steps.cfg.outputs.json }}
         run: |
           case "$(jq -r .kind <<<"$CONFIG")" in
-            library)  echo "::error::A library has nothing to deploy"; exit 1 ;;
             monorepo) echo "::error::Monorepo deploys are not implemented yet (T21)"; exit 1 ;;
           esac
 

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "godronus-org preset: repos extend github>godronus-org/toolkit (C8, T12b, T13).",
+  "extends": ["config:recommended", ":semanticCommits"],
+  "packageRules": [
+    {
+      "description": "T13: every bump of an org library is fix(deps), so it releases the consumer. Third-party bumps stay chore(deps) (T12b).",
+      "matchPackageNames": ["https://github.com/godronus-org/**", "godronus-org/**"],
+      "semanticCommitType": "fix"
+    }
+  ]
+}

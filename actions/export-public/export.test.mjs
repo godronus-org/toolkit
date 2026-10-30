@@ -101,7 +101,7 @@ test('public workflows: generated per language, env from param defaults, overlay
   const app = publicWorkflows({ kind: 'app', language: 'rust', build: { output: 'o.wasm' },
     app: { env: { INTERNAL: 'secret-ish' } } }, 'y').get('.github/workflows/deploy.yaml').toString();
   assert.ok(app.includes('env: "{\\"INTERNAL\\":\\"\\"}"') && !app.includes('secret-ish'));
-  assert.equal(publicWorkflows({ kind: 'library', language: 'rust' }, 'z').size, 0);
+  assert.deepEqual([...publicWorkflows({ kind: 'library', language: 'rust' }, 'z').keys()], ['.github/workflows/ci.yaml']);
   assert.equal(publicWorkflows({ kind: 'app', language: 'go', app: {} }, 'z').size, 0);
 
   const dir = repo({ 'src/a.rs': '', '.github/mirror/.github/workflows/ci.yaml': 'custom' });

@@ -66,12 +66,14 @@ export function readMirrorConfig(srcDir, privateRepo) {
 const TEMPLATES = fileURLToPath(new URL('../../templates/public/', import.meta.url));
 
 // Customer-facing CI + Deploy for a template or app (T25c: standard actions and
-// deploy-app only). Env is seeded from template param defaults, or the app's env
+// deploy-app only); a library gets CI only. Env is seeded from template param defaults, or the app's env
 // keys with empty values (ours are internal). Returns Map dest → content.
 export function publicWorkflows(cfg, repo) {
   const dir = join(TEMPLATES, cfg.language ?? '');
   const target = cfg[cfg.kind];
-  if (!['template', 'app'].includes(cfg.kind) || !cfg.language || !existsSync(dir)) return new Map();
+  if (!['template', 'app', 'library'].includes(cfg.kind) || !cfg.language || !existsSync(dir)) return new Map();
+  const files = readdirSync(dir).filter((f) => cfg.kind !== 'library' || f === 'ci.yaml');
+  if (cfg.kind === 'library') return new Map(files.map((f) => [`.github/workflows/${f}`, readFileSync(join(dir, f))]));
   const params = cfg.kind === 'template' ? (target.params ?? []) : [];
   const env = cfg.kind === 'template'
     ? Object.fromEntries(params.filter((p) => p.data_type !== 'secret')
@@ -87,7 +89,7 @@ export function publicWorkflows(cfg, repo) {
     ENV: JSON.stringify(env),
   };
   const out = new Map();
-  for (const file of readdirSync(dir)) {
+  for (const file of files) {
     let text = readFileSync(join(dir, file), 'utf8')
       .replace(/\{\{(\w+)\}\}/g, (_, k) => JSON.stringify(vars[k])); // JSON string = valid YAML scalar
     if (file === 'deploy.yaml' && secrets.length) {
