@@ -18,7 +18,7 @@ jobs:
       - name: Test
         run: docker run --rm -v "$PWD":/work -w /work "$COMPILER" cargo test --target x86_64-unknown-linux-gnu
       - name: Build
-        run: docker run --rm -v "$PWD":/work -w /work "$COMPILER" cargo build --release --target wasm32-wasip1
+        run: docker run --rm -v "$PWD":/work -w /work "$COMPILER" cargo build --release  # target from .cargo/config.toml
       # Black-box suite runs the built .wasm, so it comes after the build.
       - name: fastedge-test
         if: hashFiles('fastedge-test/package.json') != ''
